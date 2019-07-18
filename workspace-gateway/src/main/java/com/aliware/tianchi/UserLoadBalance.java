@@ -2,14 +2,19 @@ package com.aliware.tianchi;
 
 import org.apache.dubbo.common.Constants;
 import org.apache.dubbo.common.URL;
+import org.apache.dubbo.common.utils.AtomicPositiveInteger;
 import org.apache.dubbo.rpc.Invocation;
 import org.apache.dubbo.rpc.Invoker;
 import org.apache.dubbo.rpc.RpcException;
 import org.apache.dubbo.rpc.RpcStatus;
 import org.apache.dubbo.rpc.cluster.LoadBalance;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -20,80 +25,55 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 public class UserLoadBalance implements LoadBalance {
 
-    public static final String NAME = "leastactive";
+    public static final String NAME = "random";
 
     private final Random random = new Random();
 
     @Override
     public <T> Invoker<T> select(List<Invoker<T>> invokers, URL url, Invocation invocation) throws RpcException {
+
         int length = invokers.size();
-        // 最小的活跃数
-        int leastActive = -1;
-        // 具有相同“最小活跃数”的服务者提供者（以下用 Invoker 代称）数量
-        int leastCount = 0;
-        // leastIndexs 用于记录具有相同“最小活跃数”的 Invoker 在 invokers 列表中的下标信息
-        int[] leastIndexs = new int[length];
         int totalWeight = 0;
-        // 第一个最小活跃数的 Invoker 权重值，用于与其他具有相同最小活跃数的 Invoker 的权重进行对比，
-        // 以检测是否“所有具有相同最小活跃数的 Invoker 的权重”均相等
-        int firstWeight = 0;
         boolean sameWeight = true;
 
-        // 遍历 invokers 列表
+        // 下面这个循环有两个作用，第一是计算总权重 totalWeight，
+        // 第二是检测每个服务提供者的权重是否相同
         for (int i = 0; i < length; i++) {
-            Invoker<T> invoker = invokers.get(i);
-            // 获取 Invoker 对应的活跃数
-            int active = RpcStatus.getStatus(invoker.getUrl(), invocation.getMethodName()).getActive();
-            // 获取权重
-            int weight = invoker.getUrl().getMethodParameter(invocation.getMethodName( ), Constants.WEIGHT_KEY, Constants.DEFAULT_WEIGHT);
-            // 发现更小的活跃数，重新开始
-            if (leastActive == -1 || active < leastActive) {
-                // 使用当前活跃数 active 更新最小活跃数 leastActive
-                leastActive = active;
-                // 更新 leastCount 为 1
-                leastCount = 1;
-                // 记录当前下标值到 leastIndexs 中
-                leastIndexs[0] = i;
-                totalWeight = weight;
-                firstWeight = weight;
-                sameWeight = true;
+            int weight = getWeight(invokers.get(i), invocation);
+            // 累加权重
+            totalWeight += weight;
+            // 检测当前服务提供者的权重与上一个服务提供者的权重是否相同，
+            // 不相同的话，则将 sameWeight 置为 false。
+            if (sameWeight && i > 0
+                    && weight != getWeight(invokers.get(i - 1), invocation)) {
+                sameWeight = false;
+            }
+        }
 
-                // 当前 Invoker 的活跃数 active 与最小活跃数 leastActive 相同
-            } else if (active == leastActive) {
-                // 在 leastIndexs 中记录下当前 Invoker 在 invokers 集合中的下标
-                leastIndexs[leastCount++] = i;
-                // 累加权重
-                totalWeight += weight;
-                // 检测当前 Invoker 的权重与 firstWeight 是否相等，
-                // 不相等则将 sameWeight 置为 false
-                if (sameWeight && i > 0
-                        && weight != firstWeight) {
-                    sameWeight = false;
+        // 下面的 if 分支主要用于获取随机数，并计算随机数落在哪个区间上
+        if (totalWeight > 0 && !sameWeight) {
+            // 随机获取一个 [0, totalWeight) 区间内的数字
+            int offset = random.nextInt(totalWeight);
+            // 循环让 offset 数减去服务提供者权重值，当 offset 小于0时，返回相应的 Invoker。
+            // 举例说明一下，我们有 servers = [A, B, C]，weights = [5, 3, 2]，offset = 7。
+            // 第一次循环，offset - 5 = 2 > 0，即 offset > 5，
+            // 表明其不会落在服务器 A 对应的区间上。
+            // 第二次循环，offset - 3 = -1 < 0，即 5 < offset < 8，
+            // 表明其会落在服务器 B 对应的区间上
+            for (int i = 0; i < length; i++) {
+                // 让随机值 offset 减去权重值
+                offset -= getWeight(invokers.get(i), invocation);
+                if (offset < 0) {
+                    // 返回相应的 Invoker
+                    return invokers.get(i);
                 }
             }
         }
-        // 当只有一个 Invoker 具有最小活跃数，此时直接返回该 Invoker 即可
-        if (leastCount == 1) {
-            return invokers.get(leastIndexs[0]);
-        }
 
-        // 有多个 Invoker 具有相同的最小活跃数，但它们之间的权重不同
-        if (!sameWeight && totalWeight > 0) {
-            // 随机生成一个 [0, totalWeight) 之间的数字
-            int offsetWeight = random.nextInt(totalWeight);
-            // 循环让随机数减去具有最小活跃数的 Invoker 的权重值，
-            // 当 offset 小于等于0时，返回相应的 Invoker
-            for (int i = 0; i < leastCount; i++) {
-                int leastIndex = leastIndexs[i];
-                // 获取权重值，并让随机数减去权重值
-                offsetWeight -= getWeight(invokers.get(leastIndex), invocation);
-                if (offsetWeight <= 0)
-                    return invokers.get(leastIndex);
-            }
-        }
-        // 如果权重相同或权重为0时，随机返回一个 Invoker
-        return invokers.get(leastIndexs[random.nextInt(leastCount)]);
+        // 如果所有服务提供者权重值相同，此时直接随机返回一个即可
+        return invokers.get(random.nextInt(length));
     }
+
 
     protected int getWeight(Invoker<?> invoker, Invocation invocation) {
         // 从 url 中获取权重 weight 配置值
