@@ -3,7 +3,6 @@ package com.aliware.tianchi;
 import org.apache.dubbo.rpc.listener.CallbackListener;
 
 /**
- * @author daofeng.xjf
  *
  * 客户端监听器
  * 可选接口

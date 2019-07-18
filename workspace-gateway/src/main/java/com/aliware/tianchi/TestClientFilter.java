@@ -9,7 +9,6 @@ import org.apache.dubbo.rpc.Result;
 import org.apache.dubbo.rpc.RpcException;
 
 /**
- * @author daofeng.xjf
  *
  * 客户端过滤器
  * 可选接口
@@ -25,7 +24,6 @@ public class TestClientFilter implements Filter {
         }catch (Exception e){
             throw e;
         }
-
     }
 
     @Override

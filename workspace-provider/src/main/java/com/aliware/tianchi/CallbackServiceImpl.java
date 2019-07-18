@@ -10,7 +10,6 @@ import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * @author daofeng.xjf
  * <p>
  * 服务端回调服务
  * 可选接口
